@@ -4,7 +4,7 @@ permissions: write-all
 jobs:
   build:
     name: Build ${{ matrix.target }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     strategy: {fail-fast: false, matrix: {target: [kernel73]}}
     env:
       DK_OPENWRT: /bld/openwrt
@@ -43,7 +43,7 @@ jobs:
         echo 'CONFIG_CCACHE_DIR="/ghcache"' >> user/current/config.diff
         sudo tee /etc/docker/daemon.json <<< '{"max-concurrent-downloads":50,"max-concurrent-uploads":50,"experimental":true}'
         sudo systemctl reload docker
-        IMAGE=$IMG_INC; docker pull $IMAGE 2>&- || IMAGE=ghcr.io/w1700k/fastbuild_base:base-builder
+        IMAGE=$IMG_INC; docker pull $IMAGE 2>&- || IMAGE=ghcr.io/w1700k/fastbuild_base:base-builder-${{ matrix.target }}
         docker run -dt --name DK -v $PWD/user:$DK_USER -v $PWD/openwrt_bin:$DK_BIN -v $PWD/ghcache:/ghcache -v $PWD/stcache:/stcache -v $PWD/dlcache:/dlcache $IMAGE
         install -m 755 /dev/stdin /usr/local/bin/docker_exec <<'DKR'
         #!/bin/bash
@@ -67,27 +67,42 @@ jobs:
           cp files/build_info $DK_BIN
           ln -sf $DK_BIN bin && ln -sf /dlcache dl && ln -sf /stcache staging_dir
           bp=$DK_PROFILE fc=feeds.conf
-          cp $bp/files/$fc $fc 2>&- && cp $fc /tmp/feeds.bak
-          rm -rf feeds/* &>/dev/null; ./scripts/feeds update -a &>/dev/null; ./scripts/feeds install -a
+          if [ -f $bp/files/$fc ]; then cp $bp/files/$fc $fc; elif [ -f feeds.conf.default ]; then cp feeds.conf.default $fc; else echo "::error::no $fc in profile files/ nor repo default" >&2; exit 1; fi
+          cp $fc /tmp/feeds.bak
+          rm -rf feeds package/feeds &>/dev/null; ./scripts/feeds update -a &>/dev/null; ./scripts/feeds install -a
           mv /tmp/feeds.bak $fc &>/dev/null ||:
           cp $bp/config.diff .config
           cat $bp/patches/*.patch 2>&- | patch -d . -p0 --forward ||:
           cp -r $bp/files/ . &>/dev/null ||:
           bash $bp/custom.sh &>/dev/null ||:
           make defconfig; echo "CONFIG_VERSION_NUMBER=${{ matrix.target }}" >> .config
+          umask 022
+          grep -qF -- "--no-same-permissions -xf " include/download.mk || sed -i "s/-xf /--no-same-permissions -xf /" include/download.mk
           make download -j8 2>&1 | tee /dev/stderr | grep -q "ERROR:" || [ $PIPESTATUS -ne 0 ] && exit 1 ||:
+          git checkout -- include/download.mk ||:
         '
 
     - name: Compile OpenWrt
       run: |
         for mode in c s; do
-          docker_exec -e MODE=$mode DK bash -c '
+          if docker_exec -e MODE=$mode DK bash -e -c '
+            umask 022
+            export TAR_OPTIONS="--no-same-permissions"
             bash $DK_PROFILE/pre_compile.sh 2>&- ||:
             cd $DK_OPENWRT
-            export FORCE_UNSAFE_CONFIGURE=1 CCACHE_SLOPPINESS=file_stat_matches,include_file_mtime,time_macros CCACHE_NOHASHDIR=true CCACHE_COMPILERCHECK=content
-            make -j$(($(nproc) + 1)) V=$MODE
+            export FORCE_UNSAFE_CONFIGURE=1
+            export CCACHE_SLOPPINESS=file_stat_matches,include_file_mtime,time_macros
+            export CCACHE_NOHASHDIR=true
+            export CCACHE_COMPILERCHECK=content
+            if [ "$MODE" = s ]; then
+              make -j1 V=s
+            else
+              make -j$(($(nproc) + 1)) V=c
+            fi
             staging_dir/host/bin/ccache -d /ghcache -sz ||:
-          ' && break
+          '; then
+            break
+          fi
         done
 
     - name: Create release
