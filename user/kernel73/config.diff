@@ -170,3 +170,10 @@ CONFIG_USE_GLIBC=y
 CONFIG_USE_MOLD=y
 CONFIG_USE_STRIP=y
 CONFIG_KERNEL_WERROR=y
+CONFIG_PACKAGE_wireguard-tools
+CONFIG_PACKAGE_luci-proto-wireguard
+CONFIG_PACKAGE_luci-app-unbound
+CONFIG_PACKAGE_unbound-control-setup
+CONFIG_PACKAGE_pbr
+CONFIG_PACKAGE_luci-app-pbr
+CONFIG_PACKAGE_luci-app-commands
